@@ -1,156 +1,78 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 
-from calibration import (
+from image_processing.calibration import (
     detect_scale_bar,
-    calculate_nm_per_pixel,
     load_calibration
 )
 
-# ---------------------------------------------------
-# LOAD IMAGE
-# ---------------------------------------------------
+def detect_thickness(image):
 
-image_path = "image_processing/test_images/sample4.png"
+    original_image = image.copy()
 
-image = cv2.imread(image_path)
+    # ---------------- CALIBRATION ----------------
+    nm_per_pixel = None
 
-if image is None:
-    print("Image not found")
-    exit()
+    has_scale = detect_scale_bar(original_image)
 
-original_image = image.copy()
+    # ⚠️ Disable manual input for Streamlit
+    if has_scale:
+        nm_per_pixel = load_calibration()
+    else:
+        nm_per_pixel = load_calibration()
 
-# ---------------------------------------------------
-# CALIBRATION LOGIC
-# ---------------------------------------------------
+    # ---------------- PREPROCESS ----------------
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5,5), 0)
 
-nm_per_pixel = None
+    h, w = gray.shape
 
-has_scale = detect_scale_bar(original_image)
+    # ---------------- REMOVE METADATA ----------------
+    bottom_region = gray[int(h*0.85):h, :]
+    if np.mean(bottom_region) < 40:
+        gray = gray[:int(h*0.85), :]
 
-if has_scale:
+    h, w = gray.shape
 
-    nm_per_pixel = calculate_nm_per_pixel(original_image)
+    # ---------------- MULTI-COLUMN DETECTION ----------------
+    num_samples = 120
 
-else:
+    columns = np.linspace(int(w*0.1), int(w*0.9), num_samples).astype(int)
 
-    print("\nNo scale bar detected.")
+    top_edges = []
+    bottom_edges = []
 
-    prev = load_calibration()
+    for col in columns:
 
-    if prev is not None:
+        profile = gray[:, col]
+        gradient = np.gradient(profile)
 
-        choice = input("Use previous calibration? (y/n): ")
+        top = np.argmax(gradient)
 
-        if choice.lower() == "y":
-            nm_per_pixel = prev
-            print("Using previous calibration:", nm_per_pixel)
+        # 🔒 SAFETY CHECKS (fix your crash)
+        if top + 20 >= len(gradient):
+            continue
 
-# ---------------------------------------------------
-# PREPARE IMAGE FOR ANALYSIS
-# ---------------------------------------------------
+        search = gradient[top+20:]
 
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        if len(search) == 0:
+            continue
 
-# Gaussian smoothing
-gray = cv2.GaussianBlur(gray, (5,5), 0)
+        bottom = top + 20 + np.argmin(search)
 
-h, w = gray.shape
+        top_edges.append(top)
+        bottom_edges.append(bottom)
 
-# ---------------------------------------------------
-# Automatic metadata detection
-# ---------------------------------------------------
+    # 🔒 FINAL SAFETY
+    if len(top_edges) == 0 or len(bottom_edges) == 0:
+        return 0, 0, 0, None
 
-bottom = gray[int(h*0.85):h, :]
-mean_intensity = np.mean(bottom)
+    top_edges = np.array(top_edges)
+    bottom_edges = np.array(bottom_edges)
 
-if mean_intensity < 40:
-    print("Metadata detected → cropping bottom region")
-    gray = gray[:int(h*0.85), :]
-else:
-    print("No metadata detected")
+    thickness_pixels = np.mean(bottom_edges - top_edges)
 
-h, w = gray.shape
+    avg_top = int(np.mean(top_edges))
+    avg_bottom = int(np.mean(bottom_edges))
 
-# ---------------------------------------------------
-# MULTI COLUMN THICKNESS DETECTION
-# ---------------------------------------------------
-
-num_samples = 120
-
-columns = np.linspace(
-    int(w*0.1),
-    int(w*0.9),
-    num_samples
-).astype(int)
-
-top_edges = []
-bottom_edges = []
-
-for col in columns:
-
-    profile = gray[:, col]
-
-    gradient = np.gradient(profile)
-
-    top = np.argmax(gradient)
-
-    search = gradient[top+20:]
-    bottom = top + 20 + np.argmin(search)
-
-    top_edges.append(top)
-    bottom_edges.append(bottom)
-
-top_edges = np.array(top_edges)
-bottom_edges = np.array(bottom_edges)
-
-thickness_pixels = bottom_edges - top_edges
-
-# ---------------------------------------------------
-# STATISTICS
-# ---------------------------------------------------
-
-mean_px = np.mean(thickness_pixels)
-std_px = np.std(thickness_pixels)
-
-print("\n---- Thickness Statistics ----")
-print("Mean thickness (pixels):", round(mean_px,2))
-print("Std deviation:", round(std_px,2))
-print("Min:", np.min(thickness_pixels))
-print("Max:", np.max(thickness_pixels))
-
-# ---------------------------------------------------
-# CONVERT TO NM
-# ---------------------------------------------------
-
-if nm_per_pixel is not None:
-
-    thickness_nm = mean_px * nm_per_pixel
-
-    print("\n---- Final Result ----")
-    print("Thickness:", round(thickness_nm,2), "nm")
-
-else:
-
-    print("\nNo calibration available.")
-    print("Thickness:", round(mean_px,2), "pixels")
-
-# ---------------------------------------------------
-# VISUALIZATION
-# ---------------------------------------------------
-
-image_display = original_image.copy()
-
-avg_top = int(np.mean(top_edges))
-avg_bottom = int(np.mean(bottom_edges))
-
-cv2.line(image_display, (0,avg_top), (w,avg_top), (0,255,0), 2)
-cv2.line(image_display, (0,avg_bottom), (w,avg_bottom), (0,255,0), 2)
-
-plt.figure(figsize=(8,4))
-plt.imshow(cv2.cvtColor(image_display, cv2.COLOR_BGR2RGB))
-plt.title("Detected Oxide Thickness")
-plt.axis("off")
-plt.show()
+    return thickness_pixels, avg_top, avg_bottom, nm_per_pixel
