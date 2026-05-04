@@ -11,15 +11,7 @@ def detect_thickness(image):
     original_image = image.copy()
 
     # ---------------- CALIBRATION ----------------
-    nm_per_pixel = None
-
-    has_scale = detect_scale_bar(original_image)
-
-    # ⚠️ Disable manual input for Streamlit
-    if has_scale:
-        nm_per_pixel = load_calibration()
-    else:
-        nm_per_pixel = load_calibration()
+    nm_per_pixel = load_calibration(image)
 
     # ---------------- PREPROCESS ----------------
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -29,6 +21,8 @@ def detect_thickness(image):
 
     # ---------------- REMOVE METADATA ----------------
     bottom_region = gray[int(h*0.85):h, :]
+
+    # If bottom is dark → remove it
     if np.mean(bottom_region) < 40:
         gray = gray[:int(h*0.85), :]
 
@@ -36,7 +30,6 @@ def detect_thickness(image):
 
     # ---------------- MULTI-COLUMN DETECTION ----------------
     num_samples = 120
-
     columns = np.linspace(int(w*0.1), int(w*0.9), num_samples).astype(int)
 
     top_edges = []
@@ -49,7 +42,7 @@ def detect_thickness(image):
 
         top = np.argmax(gradient)
 
-        # 🔒 SAFETY CHECKS (fix your crash)
+        # 🔒 SAFETY CHECK
         if top + 20 >= len(gradient):
             continue
 
@@ -65,7 +58,7 @@ def detect_thickness(image):
 
     # 🔒 FINAL SAFETY
     if len(top_edges) == 0 or len(bottom_edges) == 0:
-        return 0, 0, 0, None
+        return None
 
     top_edges = np.array(top_edges)
     bottom_edges = np.array(bottom_edges)
